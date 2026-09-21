@@ -1,19 +1,14 @@
-export default function CartPanel({ cart, onChangeQuantity, onClose }) {
-  const subtotal = cart.reduce((total, item) => total + item.price * item.quantity, 0)
-  const delivery = cart.length ? 2.99 : 0
-  const total = subtotal + delivery
-
-  return (
-    <aside className="cart-panel" aria-label="Your order">
-      <div className="cart-panel-header">
-        <div><span className="eyebrow">Your basket</span><h2>Ready when you are</h2></div>
-        <button className="close-button" type="button" onClick={onClose} aria-label="Close cart">×</button>
-      </div>
-      {cart.length === 0 ? <div className="empty-cart"><span>🛍️</span><p>Your basket is waiting for something delicious.</p></div> : <>
-        <div className="cart-items">{cart.map((item) => <div className="cart-item" key={item.id}><span className="cart-emoji">{item.emoji}</span><div><strong>{item.name}</strong><small>${(item.price * item.quantity).toFixed(2)}</small><div className="quantity"><button type="button" onClick={() => onChangeQuantity(item.id, -1)} aria-label={`Remove one ${item.name}`}>−</button><span>{item.quantity}</span><button type="button" onClick={() => onChangeQuantity(item.id, 1)} aria-label={`Add one ${item.name}`}>+</button></div></div></div>)}</div>
-        <div className="bill"><div><span>Subtotal</span><span>${subtotal.toFixed(2)}</span></div><div><span>Delivery</span><span>${delivery.toFixed(2)}</span></div><div className="total"><strong>Total</strong><strong>${total.toFixed(2)}</strong></div></div>
-        <button className="checkout-button" type="button" onClick={() => alert('Checkout is next sprint. Your order is saved in this demo!')}>Continue to checkout <span>→</span></button>
-      </>}
-    </aside>
-  )
+export default function CartPanel({ cart, onChangeQuantity, onRemove, onClear, onCheckout, onClose, pending, error }) {
+  const items = cart?.items || []
+  const summary = cart?.summary || cart || {}
+  const money = (value) => `$${Number(value || 0).toFixed(2)}`
+  return <aside className="cart-panel" aria-label="Your order">
+    <div className="cart-panel-header"><div><span className="eyebrow">Your basket</span><h2>Ready when you are</h2></div><button className="close-button" type="button" onClick={onClose} aria-label="Close cart">×</button></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {!items.length ? <div className="empty-cart"><span>🛍️</span><p>Your basket is waiting for something delicious.</p></div> : <>
+      <div className="cart-items">{items.map((item) => { const id = item.id ?? item.cart_item_id; const menuItem = item.menu_item || item.menuItem || item; return <div className="cart-item" key={id}><span className="cart-emoji">{menuItem.emoji || '🍽️'}</span><div><strong>{menuItem.name || 'Menu item'}</strong><small>{money(item.line_total ?? item.total ?? Number(menuItem.price) * item.quantity)}</small><div className="quantity"><button type="button" disabled={pending} onClick={() => item.quantity > 1 ? onChangeQuantity(id, item.quantity - 1) : onRemove(id)} aria-label={`Remove one ${menuItem.name || 'item'}`}>−</button><span>{item.quantity}</span><button type="button" disabled={pending} onClick={() => onChangeQuantity(id, item.quantity + 1)} aria-label={`Add one ${menuItem.name || 'item'}`}>+</button></div></div></div> })}</div>
+      <div className="bill"><div><span>Subtotal</span><span>{money(summary.subtotal)}</span></div><div><span>Delivery</span><span>{money(summary.deliveryFee ?? summary.delivery_fee)}</span></div><div><span>Tax</span><span>{money(summary.tax)}</span></div><div className="total"><strong>Total</strong><strong>{money(summary.total)}</strong></div></div>
+      <button className="checkout-button" type="button" disabled={pending} onClick={onCheckout}>Continue to checkout <span>→</span></button><button className="text-button" type="button" disabled={pending} onClick={onClear}>Clear basket</button>
+    </>}
+  </aside>
 }

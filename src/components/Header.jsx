@@ -1,4 +1,4 @@
-export default function Header({ cartCount, onCartClick }) {
+export default function Header({ cartCount, onCartClick, user, onAccountClick }) {
   return (
     <header className="site-header">
       <a className="brand" href="#top" aria-label="CraveCart home">
@@ -9,9 +9,10 @@ export default function Header({ cartCount, onCartClick }) {
         <a className="active" href="#menu">Browse menu</a>
         <a href="#how-it-works">How it works</a>
       </nav>
-      <button className="cart-button" type="button" onClick={onCartClick} aria-label={`Open cart with ${cartCount} items`}>
-        Cart <span>{cartCount}</span>
-      </button>
+      <div className="header-actions">
+        <button className="account-button" type="button" onClick={onAccountClick}>{user ? user.name || 'Account' : 'Sign in'}</button>
+        <button className="cart-button" type="button" onClick={onCartClick} aria-label={`Open cart with ${cartCount} items`}>Cart <span>{cartCount}</span></button>
+      </div>
     </header>
   )
 }
