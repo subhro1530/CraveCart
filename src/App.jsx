@@ -5,6 +5,7 @@ import CartPanel from './components/CartPanel.jsx'
 import AuthPanel from './components/AuthPanel.jsx'
 import AccountPanel from './components/AccountPanel.jsx'
 import OperationsPanel from './components/OperationsPanel.jsx'
+import OrdersPanel from './components/OrdersPanel.jsx'
 import { addressApi, authApi, cartApi, clearToken, fulfillmentApi, kitchenApi, orderApi, restaurantApi, setToken, userApi } from './cravecartApi.js'
 
 const listData = (value, key) => Array.isArray(value) ? value : value?.[key] || []
@@ -35,6 +36,9 @@ function App() {
   const [accountOpen, setAccountOpen] = useState(false)
   const [addresses, setAddresses] = useState([])
   const [orders, setOrders] = useState([])
+  const [ordersOpen, setOrdersOpen] = useState(false)
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersError, setOrdersError] = useState('')
   const [accountError, setAccountError] = useState('')
   const [checkoutPending, setCheckoutPending] = useState(false)
   const [checkoutOptions, setCheckoutOptions] = useState(null)
@@ -51,8 +55,8 @@ function App() {
       if (selectedKitchen) loadKitchenMenu(provider.id)
       else loadMenu(provider.id)
       loadFulfillment(provider.id, Boolean(selectedKitchen))
-    } else { setMenuItems([]); setFulfillmentInfo({ windows: [], points: [] }) }
-  }, [selectedRestaurant, selectedKitchen])
+    } else setFulfillmentInfo({ windows: [], points: [] })
+  }, [selectedRestaurant, selectedKitchen, restaurants, kitchens])
   useEffect(() => { if (user) loadCart() }, [user])
 
   async function loadRestaurants() {
@@ -84,6 +88,18 @@ function App() {
       setFulfillmentInfo({ windows: listData(windows, 'windows'), points: listData(points, 'pickupPoints') })
     } catch { setFulfillmentInfo({ windows: [], points: [] }) }
   }
+  async function loadAllMenus(restaurantValues, kitchenValues) {
+    if (!restaurantValues.length && !kitchenValues.length) { setMenuItems([]); return }
+    setMenuLoading(true); setMenuError('')
+    try {
+      const restaurantMenus = await Promise.all(restaurantValues.map((restaurant) => restaurantApi.menu(restaurant.id).catch(() => [])))
+      const kitchenMenus = await Promise.all(kitchenValues.map((kitchen) => kitchenApi.menu(kitchen.id).catch(() => [])))
+      setMenuItems([
+        ...restaurantMenus.flat().map((item) => ({ ...item, source: 'RESTAURANT' })),
+        ...kitchenMenus.flat().map((item) => ({ ...item, source: 'KITCHEN' }))
+      ])
+    } catch (error) { setMenuItems([]); setMenuError(messageFor(error)) } finally { setMenuLoading(false) }
+  }
   async function loadCart() {
     setCartLoading(true)
     try { setCart(await cartApi.get() || { items: [] }) } catch (error) { if (error.status === 401) signOut(); setCartError(messageFor(error)) } finally { setCartLoading(false) }
@@ -93,7 +109,10 @@ function App() {
     try { setCart(await action() || { items: [] }) } catch (error) { if (error.status === 401) signOut(); setCartError(messageFor(error)) } finally { setCartMutationLoading(false) }
   }
   function requireAuth() { if (!user) { setAuthOpen(true); setIsCartOpen(false); return false } return true }
-  function addToCart(item) { if (requireAuth()) mutateCart(() => cartApi.addItem(item.id, 1)) }
+  function addToCart(item) {
+    if (!requireAuth()) return
+    mutateCart(() => cartApi.addItem(item.id, 1)).then(() => setIsCartOpen(true))
+  }
   function signOut() { clearToken(); setUser(null); setCart({ items: [] }); setAddresses([]); setOrders([]); setAccountOpen(false) }
   async function submitAuth(mode, form) {
     setAuthPending(true); setAuthError('')
@@ -110,16 +129,28 @@ function App() {
     setAccountOpen(true); setAccountError('')
     try { const [addressResult, orderResult, profile] = await Promise.all([addressApi.list(), orderApi.list(), userApi.me()]); setAddresses(listData(addressResult, 'addresses')); setOrders(listData(orderResult, 'orders')); setUser(profile) } catch (error) { if (error.status === 401) signOut(); setAccountError(messageFor(error)) }
   }
+  async function openOrders() {
+    if (!requireAuth()) return
+    setOrdersOpen(true); setOrdersLoading(true); setOrdersError('')
+    try { setOrders(listData(await orderApi.list(), 'orders')) }
+    catch (error) { if (error.status === 401) signOut(); setOrdersError(messageFor(error)) }
+    finally { setOrdersLoading(false) }
+  }
   async function beginCheckout() {
     if (!requireAuth() || !cart.items?.length) return
     setCartError('')
     try {
-      const addressResult = addresses.length ? addresses : listData(await addressApi.list(), 'addresses')
+      const addressResult = addresses.length ? addresses : await addressApi.list().then((result) => listData(result, 'addresses')).catch(() => [])
       setAddresses(addressResult)
-      if (!addressResult.length) { await openAccount(); return }
-      const restaurantId = selectedRestaurant?.id || cart.items[0]?.restaurant_id || cart.items[0]?.menu_item?.restaurant_id
-      const [windows, points] = restaurantId ? await Promise.all([fulfillmentApi.windows(restaurantId), fulfillmentApi.pickupPoints(restaurantId)]) : [[], []]
-      setCheckoutOptions({ type: 'DELIVERY', addresses: addressResult, address_id: addressResult[0].id, delivery_window_id: windows?.[0]?.id || windows?.windows?.[0]?.id || '', pickup_point_id: points?.[0]?.id || points?.pickupPoints?.[0]?.id || '', windows: listData(windows, 'windows'), points: listData(points, 'pickupPoints') })
+      const provider = cart.cart || cart.items[0] || {}
+      const restaurantId = selectedRestaurant?.id || provider.restaurant_id || cart.items[0]?.restaurant_id
+      const kitchenId = selectedKitchen?.id || provider.kitchen_id || cart.items[0]?.kitchen_id
+      const [windows, points] = kitchenId && !restaurantId
+        ? await Promise.all([kitchenApi.windows(kitchenId), kitchenApi.locations(kitchenId)])
+        : restaurantId ? await Promise.all([fulfillmentApi.windows(restaurantId), fulfillmentApi.pickupPoints(restaurantId)]) : [[], []]
+      const validWindows = listData(windows, 'windows').filter((window) => window.is_active !== false)
+      const validPoints = listData(points, 'pickupPoints').filter((point) => point.is_active !== false)
+      setCheckoutOptions({ type: 'PICKUP', addresses: addressResult, address_id: addressResult[0]?.id || '', delivery_window_id: validWindows[0]?.id || '', pickup_point_id: validPoints[0]?.id || '', windows: validWindows, points: validPoints })
     } catch (error) { setCartError(messageFor(error)) }
   }
   async function checkout() {
@@ -127,7 +158,7 @@ function App() {
     setCheckoutPending(true); setAccountError('')
     try {
       const payload = checkoutOptions.type === 'PICKUP'
-        ? { fulfillment_type: 'PICKUP', pickup_point_id: Number(checkoutOptions.pickup_point_id), payment_method: 'COD' }
+        ? { fulfillment_type: 'PICKUP', pickup_point_id: Number(checkoutOptions.pickup_point_id), delivery_window_id: checkoutOptions.delivery_window_id ? Number(checkoutOptions.delivery_window_id) : undefined, payment_method: 'COD' }
         : { fulfillment_type: 'DELIVERY', address_id: Number(checkoutOptions.address_id), delivery_window_id: checkoutOptions.delivery_window_id ? Number(checkoutOptions.delivery_window_id) : undefined, payment_method: 'COD' }
       const order = await orderApi.create(payload)
       await cartApi.get().then(setCart); setOrders((current) => [order, ...current]); setCheckoutOptions(null); setIsCartOpen(false); setAccountOpen(true)
@@ -146,11 +177,16 @@ function App() {
   }), [menuItems, searchTerm, dishSource])
   const isAuthenticated = Boolean(user)
   const cartCount = (cart.items || []).reduce((count, item) => count + Number(item.quantity || 0), 0)
+  useEffect(() => {
+    if (!selectedRestaurant && !selectedKitchen) loadAllMenus(restaurants, kitchens)
+  }, [selectedRestaurant, selectedKitchen, restaurants, kitchens])
+
   if (authLoading) return <div className="loading-screen">Loading your CraveCart…</div>
+
   if (user && user.role !== 'CUSTOMER') return <><Header cartCount={0} user={user} onAccountClick={() => {}} onCartClick={() => {}} /><OperationsPanel user={user} onSignOut={signOut} /></>
 
   return <div id="top">
-    <Header cartCount={cartCount} user={isAuthenticated ? user : null} onAccountClick={isAuthenticated ? openAccount : () => setAuthOpen(true)} onCartClick={() => { if (isAuthenticated) { setIsCartOpen(true); loadCart() } else setAuthOpen(true) }} />
+    <Header cartCount={cartCount} user={isAuthenticated ? user : null} onAccountClick={isAuthenticated ? openAccount : () => setAuthOpen(true)} onOrdersClick={openOrders} onCartClick={() => { if (isAuthenticated) { setIsCartOpen(true); loadCart() } else setAuthOpen(true) }} />
     <main>
       <section className="hero" aria-labelledby="hero-title"><div className="hero-copy"><span className="eyebrow">Dinner, delivered differently</span><h1 id="hero-title">Good food has<br /><em>a feeling.</em></h1><p>Discover local favorites and tiny treasures, brought to your door while they are still delicious.</p><a className="hero-link" href="#menu">Explore the menu <span>↓</span></a></div><div className="hero-art" aria-label="A colorful bowl of food" role="img"><span className="hero-spark">✦</span><span className="hero-plate">🥙</span><span className="hero-note">made with<br /><strong>good energy</strong></span></div></section>
       <section className="menu-section" id="menu" aria-labelledby="menu-title"><div className="section-intro"><div><span className="eyebrow">The good stuff</span><h2 id="menu-title">Pick your mood</h2></div><label className="search-box"><span aria-hidden="true">⌕</span><input type="search" placeholder="Search restaurants or dishes" value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} aria-label="Search restaurants or dishes" /></label></div>
@@ -165,6 +201,7 @@ function App() {
     {isCartOpen && <><button className="backdrop" type="button" aria-label="Close cart" onClick={() => setIsCartOpen(false)}></button><CartPanel cart={cart} pending={cartLoading || cartMutationLoading || checkoutPending} error={cartError} checkoutOptions={checkoutOptions} onCheckoutOptions={setCheckoutOptions} onChangeQuantity={(id, quantity) => mutateCart(() => cartApi.updateItem(id, quantity))} onRemove={(id) => mutateCart(() => cartApi.removeItem(id))} onClear={() => mutateCart(() => cartApi.clear())} onCheckout={checkoutOptions ? checkout : beginCheckout} onClose={() => setIsCartOpen(false)} /></>}
     {authOpen && <AuthPanel onSubmit={submitAuth} onClose={() => setAuthOpen(false)} error={authError} pending={authPending} />}
     {accountOpen && <AccountPanel user={user} addresses={addresses} orders={orders} error={accountError} pending={checkoutPending} onClose={() => setAccountOpen(false)} onSignOut={signOut} onProfileSave={saveProfile} onAddressSave={saveAddress} onAddressUpdate={updateAddress} onAddressDelete={deleteAddress} onOrderCancel={cancelOrder} />}
+    {ordersOpen && <OrdersPanel orders={orders} loading={ordersLoading} error={ordersError} onRetry={openOrders} onClose={() => setOrdersOpen(false)} />}
   </div>
 }
 
